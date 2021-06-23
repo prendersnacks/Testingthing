@@ -15,6 +15,7 @@ const PRIVATE_KEY = 'X'
 const arbitrageSigningWallet = new Wallet(PRIVATE_KEY);
 const realcontract = 'X'
 const flashbaby = new Contract(realcontract, BUNDLE_EXECUTOR_ABI, provider) 
+const flashbaby = contract.connect(signer)
 
 export interface CrossedMarketDetails {
   profit: BigNumber,
@@ -137,64 +138,74 @@ export class Arbitrage {
         return bestCrossedMarkets
     }
 
-    // TODO: take more than 1
+   // TODO: take more than 1
     async takeCrossedMarkets(bestCrossedMarkets: CrossedMarketDetails[], blockNumber: number, minerRewardPercentage: number): Promise<void> {
         for (const bestCrossedMarket of bestCrossedMarkets) {
 
             console.log("Send this much WETH", bestCrossedMarket.volume.toString(), "get this much profit", bestCrossedMarket.profit.toString())
             const buyCalls = await bestCrossedMarket.buyFromMarket.sellTokensToNextMarket(WETH_ADDRESS, bestCrossedMarket.volume, bestCrossedMarket.sellToMarket);
             const inter = bestCrossedMarket.buyFromMarket.getTokensOut(WETH_ADDRESS, bestCrossedMarket.tokenAddress, bestCrossedMarket.volume)
-            const sellCallData = await bestCrossedMarket.sellToMarket.sellTokens(bestCrossedMarket.tokenAddress, inter, realcontract.address);
+            const sellCallData = await bestCrossedMarket.sellToMarket.sellTokens(bestCrossedMarket.tokenAddress, inter, this.bundleExecutorContract.address);
             const targets: Array<string> = [...buyCalls.targets, bestCrossedMarket.sellToMarket.marketAddress]
             const payloads: Array<string> = [...buyCalls.data, sellCallData]
             const flashloanFee = bestCrossedMarket.volume.mul(flashloanFeePercentage).div(10000);
             const profitMinusFee = bestCrossedMarket.profit.sub(flashloanFee)
-            const minerReward = 0;
             const ethersAbiCoder = new utils.AbiCoder()
-            const typeParams = ['uint256', 'address[]', 'bytes[]']
-            const inputParams = [minerReward.toString(), targets, payloads]
+            const typeParams = ['address[]', 'bytes[]']
+            const inputParams = [targets, payloads]
             const params = ethersAbiCoder.encode(typeParams, inputParams)
             console.log({ targets, payloads })
             const request = await fetchJson(
                 `https://ethgasstation.info/api/ethgasAPI.json?api-key=${process.env.ETH_GAS_STATION}`
             );
             const prices = await request;
-            const gasPrice = prices['fastest'] / 10;
+            const gasPriced = prices['fastest'] / 10;
+            const gasPricee = gasPriced * (2)
+            const gasPrice = utils.parseUnits(gasPricee.toString(), 9)
             console.log("gas price", gasPrice.toString())
-            const gasLimit = 520000
-            const gascost = gasPrice * gasLimit
-            const profpref = BigNumber.from(profitMinusFee).div(1000000000)
-            const profitMinusFeeMinusMinerReward = profpref.sub(gascost)
+            const fgasLimit = 600000
+            const gascost = BigNumber.from(gasPrice).mul(fgasLimit)
+            const gasmoney = BigNumber.from(gascost).div(100000000) 
+            const fuckingshit = profitMinusFee.div(100000000)
+            const profitMinusFeeMinusMinerReward = fuckingshit.sub(gasmoney)
 
             console.log("real profit", profitMinusFeeMinusMinerReward.toString())
-
+                                                   
             if (profitMinusFeeMinusMinerReward.gt(0)) try {
-                const realshit = flashbaby.flashloan(
-                    WETH_ADDRESS,
+                try {
+                const estimateGas = await flashbaby.estimateGas.flashloan(
                     bestCrossedMarket.volume,
-                    params).encodeAbi()
-                 const howitsend = {
-                     gas: utils.hexlify(gasLimit),
-                     gasPrice: utils.hexlify(gasPrice),
-                     to: realcontract,
-                     data: realshit,
-                     from: arbitrageSigningWallet.address,
-                     nonce: 0
+                    params);
+                if (estimateGas.gt(600000)) {
+                    console.log("EstimateGas succeeded, but suspiciously large: " + estimateGas.toString())
+                    return
                 }
-                
-                    const { hash } = await arbitrageSigningWallet.sendTransaction(howitsend)
-                    await provider.getTransactionReceipt(hash)
-                    
+                const gasLimit = estimateGas
+                const overrides = {
 
+                    gasPrice: gasPrice,
+                    gasLimit: gasLimit
+                };
+                const transaction = await flashbaby.flashloan(
+                    bestCrossedMarket.volume,
+                    params,
+                    overrides);
+
+                    await transaction.wait(1)
+                    return
                 } catch (e) {
-                    console.log("Profit too low.")
-                    continue
+                console.warn(`Estimate gas failure for ${JSON.stringify(bestCrossedMarket)}`)
+                continue 
                 }
-                        
+            } catch (e) {
+                console.log("no profit.")
+                return
+            }
+
             return
 
 
 
-        } 
+        }
     }
 }
